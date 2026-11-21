@@ -14,63 +14,40 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Detect project root (Cargo.toml might be in subfolder) ──────────
       - name: Detect project root
         id: roots
         shell: pwsh
         run: |
-          # Find Cargo.toml — could be at root or inside NitroControl-main/
           $cargo = Get-ChildItem -Recurse -Depth 2 -Filter "Cargo.toml" |
                    Where-Object { $_.DirectoryName -notmatch "crates" } |
                    Select-Object -First 1
-
-          if ($null -eq $cargo) {
-            Write-Error "Cargo.toml not found"; exit 1
-          }
+          if ($null -eq $cargo) { Write-Error "Cargo.toml not found"; exit 1 }
           $rustRoot = $cargo.DirectoryName
           Write-Host "Rust root: $rustRoot"
           echo "rust=$rustRoot" >> $env:GITHUB_OUTPUT
 
-          # Find frontend/package.json
           $pkg = Get-ChildItem -Recurse -Depth 3 -Filter "package.json" |
                  Where-Object { $_.DirectoryName -match "frontend" -and $_.DirectoryName -notmatch "node_modules" } |
                  Select-Object -First 1
-
-          if ($null -eq $pkg) {
-            Write-Error "frontend/package.json not found"; exit 1
-          }
+          if ($null -eq $pkg) { Write-Error "frontend/package.json not found"; exit 1 }
           $frontendRoot = $pkg.DirectoryName
           Write-Host "Frontend root: $frontendRoot"
           echo "frontend=$frontendRoot" >> $env:GITHUB_OUTPUT
 
-      # ── 3. Rust setup & build ──────────────────────────────────────────────
-      - name: Setup Rust (stable)
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-
-      - name: Cache Rust build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build Rust backend
         shell: pwsh
         run: |
           Set-Location "${{ steps.roots.outputs.rust }}"
           cargo build --release -p nitrocontrol-daemon
-        env:
-          CARGO_TERM_COLOR: always
 
-      # ── 4. Frontend ────────────────────────────────────────────────────────
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -83,61 +60,36 @@ jobs:
           npm ci
           npm run build
 
-      # ── 5. Build launcher EXE (.NET 8 WinForms, single-file) ───────────────
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Build launcher (NitroControl.exe)
+      - name: Build launcher
         shell: pwsh
         run: |
-          # Find the .csproj
           $csproj = Get-ChildItem -Recurse -Depth 2 -Filter "NitroControl.csproj" | Select-Object -First 1
           if ($null -eq $csproj) { Write-Error "NitroControl.csproj not found"; exit 1 }
-
           Set-Location $csproj.DirectoryName
-          dotnet publish NitroControl.csproj `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            /p:PublishSingleFile=true `
-            /p:EnableCompressionInSingleFile=true `
-            -o "${{ github.workspace }}\launcher-out"
+          dotnet publish NitroControl.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:EnableCompressionInSingleFile=true -o "${{ github.workspace }}\launcher-out"
 
-      # ── 6. Stage release package ────────────────────────────────────────────
       - name: Stage release files
         shell: pwsh
         run: |
-          $rustRoot     = "${{ steps.roots.outputs.rust }}"
+          $rustRoot = "${{ steps.roots.outputs.rust }}"
           $frontendRoot = "${{ steps.roots.outputs.frontend }}"
           $pkg = "${{ github.workspace }}\release-pkg"
-
           New-Item -ItemType Directory -Force -Path $pkg | Out-Null
-
-          # Launcher
           Copy-Item "${{ github.workspace }}\launcher-out\NitroControl.exe" "$pkg\NitroControl.exe"
-
-          # Icon (search for it)
           $ico = Get-ChildItem -Recurse -Depth 3 -Filter "NitroControl.ico" | Select-Object -First 1
           if ($ico) { Copy-Item $ico.FullName "$pkg\NitroControl.ico" }
-
-          # Rust backend
           Copy-Item "$rustRoot\target\release\nitrocontrol-daemon.exe" "$pkg\nitrocontrol-backend.exe"
-
-          # Frontend dist
           $distSrc = Join-Path $frontendRoot "dist"
           New-Item -ItemType Directory -Force -Path "$pkg\frontend\dist" | Out-Null
           Copy-Item "$distSrc\*" "$pkg\frontend\dist\" -Recurse
-
-          # License
           $lic = Get-ChildItem -Recurse -Depth 2 -Filter "LICENSE*" | Select-Object -First 1
           if ($lic) { Copy-Item $lic.FullName "$pkg\LICENSE.txt" }
 
-          Write-Host "Staged:"
-          Get-ChildItem $pkg -Recurse | Select-Object -ExpandProperty FullName
-
-      # ── 7. Build NSIS installer ─────────────────────────────────────────────
       - name: Install NSIS
         run: choco install nsis --no-progress -y
         shell: pwsh
@@ -145,48 +97,31 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          $pkg  = "${{ github.workspace }}\release-pkg"
-          $nsi  = Get-ChildItem -Recurse -Depth 2 -Filter "installer.nsi" | Select-Object -First 1
+          $pkg = "${{ github.workspace }}\release-pkg"
+          $nsi = Get-ChildItem -Recurse -Depth 2 -Filter "installer.nsi" | Select-Object -First 1
           if ($null -eq $nsi) { Write-Error "installer.nsi not found"; exit 1 }
-
-          $nsiDir = $nsi.DirectoryName
-          Set-Location $nsiDir
-
-          # Copy everything NSIS needs next to installer.nsi
-          Copy-Item "$pkg\NitroControl.exe"          "NitroControl.exe"          -Force
-          Copy-Item "$pkg\nitrocontrol-backend.exe"   "nitrocontrol-backend.exe"  -Force
-          if (Test-Path "$pkg\NitroControl.ico") {
-            Copy-Item "$pkg\NitroControl.ico"         "NitroControl.ico"          -Force
-          }
-          if (-not (Test-Path "LICENSE.txt")) {
-            if (Test-Path "$pkg\LICENSE.txt") { Copy-Item "$pkg\LICENSE.txt" "LICENSE.txt" -Force }
-          }
+          Set-Location $nsi.DirectoryName
+          Copy-Item "$pkg\NitroControl.exe" "NitroControl.exe" -Force
+          Copy-Item "$pkg\nitrocontrol-backend.exe" "nitrocontrol-backend.exe" -Force
+          if (Test-Path "$pkg\NitroControl.ico") { Copy-Item "$pkg\NitroControl.ico" "NitroControl.ico" -Force }
+          if (-not (Test-Path "LICENSE.txt") -and (Test-Path "$pkg\LICENSE.txt")) { Copy-Item "$pkg\LICENSE.txt" "LICENSE.txt" -Force }
           New-Item -ItemType Directory -Force -Path "frontend\dist" | Out-Null
           Copy-Item "$pkg\frontend\dist\*" "frontend\dist\" -Recurse -Force
-
           & "C:\Program Files (x86)\NSIS\makensis.exe" /V3 installer.nsi
-
-          $installer = Join-Path $nsiDir "NitroControl-Setup-x64.exe"
+          $installer = Join-Path $nsi.DirectoryName "NitroControl-Setup-x64.exe"
           if (-not (Test-Path $installer)) { Write-Error "NSIS build failed"; exit 1 }
-
-          # Move to workspace root for upload
           Copy-Item $installer "${{ github.workspace }}\NitroControl-Setup-x64.exe" -Force
-          Write-Host "Installer: $((Get-Item "${{ github.workspace }}\NitroControl-Setup-x64.exe").Length / 1MB) MB"
 
-      # ── 8. Portable ZIP ─────────────────────────────────────────────────────
       - name: Create portable ZIP
         shell: pwsh
         run: |
-          Compress-Archive -Path "${{ github.workspace }}\release-pkg\*" `
-            -DestinationPath "${{ github.workspace }}\NitroControl-Portable-x64.zip" -Force
+          Compress-Archive -Path "${{ github.workspace }}\release-pkg\*" -DestinationPath "${{ github.workspace }}\NitroControl-Portable-x64.zip" -Force
 
-      # ── 9. Upload to GitHub Releases ────────────────────────────────────────
       - name: Get version tag
         id: version
         shell: pwsh
         run: |
-          if ($env:GITHUB_REF -match 'refs/tags/(.+)') { $tag = $matches[1] }
-          else { $tag = "v1.1.0-dev" }
+          if ($env:GITHUB_REF -match 'refs/tags/(.+)') { $tag = $matches[1] } else { $tag = "v1.1.0-dev" }
           echo "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
@@ -196,27 +131,20 @@ jobs:
           name: "NitroControl ${{ steps.version.outputs.tag }}"
           draft: false
           prerelease: false
-          generate_release_notes: true
           body: |
             ## NitroControl ${{ steps.version.outputs.tag }}
-
-            Fan control & performance monitor untuk Acer Nitro laptop (Nitro V15, Nitro 5, Nitro 16, Nitro 17).
+            Fan control & performance monitor untuk Acer Nitro laptop.
 
             ### Download
             | File | Keterangan |
             |------|-----------|
-            | **NitroControl-Setup-x64.exe** | ✅ Installer — termasuk uninstaller di Control Panel |
+            | **NitroControl-Setup-x64.exe** | ✅ Installer lengkap dengan uninstaller |
             | NitroControl-Portable-x64.zip | Portable — ekstrak dan langsung pakai |
-
-            ### Cara install
-            Jalankan `NitroControl-Setup-x64.exe`, klik Yes di UAC.
-            Untuk uninstall: **Control Panel → Programs & Features → NitroControl → Uninstall**
 
             ### Requirements
             - Windows 10/11 x64
             - Microsoft Edge atau Google Chrome
-            - Administrator (untuk kontrol kipas via Acer WMI)
-
+            - Run as Administrator
           files: |
             NitroControl-Setup-x64.exe
             NitroControl-Portable-x64.zip
