@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>NitroControl</AssemblyName>
+    <RootNamespace>NitroControl</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>NitroControl.ico</ApplicationIcon>
+    <!-- Single-file self-contained .exe — no .NET runtime needed on target PC -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <TrimmerRootDescriptor></TrimmerRootDescriptor>
+    <!-- Version info visible in Properties → Details -->
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0.0</FileVersion>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <Company>RafaelSitompoel</Company>
+    <Product>NitroControl</Product>
+    <Description>Acer Nitro fan &amp; performance controller for Windows desktop</Description>
+    <Copyright>Copyright © 2024-2026 RafaelSitompoel</Copyright>
+  </PropertyGroup>
+</Project>
